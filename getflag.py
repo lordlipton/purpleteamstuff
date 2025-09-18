@@ -6,7 +6,7 @@ import requests # Make sure to install this: pip install requests
 # --- Configuration ---
 # This is the address of your central Flask web app.
 # IMPORTANT: Change this to the actual IP address or hostname of your server.
-FLAG_AUTHORITY_URL = "http://192.168.1.100:5000/api/get_current_flag"
+FLAG_AUTHORITY_URL = "http://192.168.1.119:5000/api/get_current_flag"
 
 # The local file paths for this specific machine.
 # Ensure the user running the script has permissions for this path.

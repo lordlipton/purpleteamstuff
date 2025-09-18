@@ -1,95 +1,133 @@
-import os
+import string
+import random
 import time
+import threading
 import json
-import requests # Make sure to install this: pip install requests
+from flask import Flask, request, jsonify, render_template_string
 
 # --- Configuration ---
-# This is the address of your central Flask web app.
-# IMPORTANT: Change this to the actual IP address or hostname of your server.
-FLAG_AUTHORITY_URL = "http://192.168.1.100:5000/api/get_current_flag"
+FLAG_LIFETIME_SECONDS = 300  # 5 minutes
+TEAM_API_KEY = "SECRET_API_KEY_HERE" # IMPORTANT: Change this to a secure, random key
 
-# The local file paths for this specific machine.
-# Ensure the user running the script has permissions for this path.
-USER_FLAG_PATH = "/home/ctf_user/flag.txt" 
-# Writing to /root requires running the script with sudo.
-ROOT_FLAG_PATH = "/root/flag.txt"
+# --- Global State ---
+# This dictionary will hold our application's state. Using a dictionary
+# makes it mutable, which is easier to manage across threads.
+app_state = {
+    "current_flag": "flag{this_is_the_initial_flag}"
+}
 
-# The secret API key must match the one set on the server.
-TEAM_API_KEY = "SECRET_API_KEY_HERE" # IMPORTANT: Change this to match the server's key
+# --- Flag Generation Logic ---
+def generate_new_flag(length=32):
+    """Generates a new, random CTF-style flag."""
+    alphabet = string.ascii_letters + string.digits
+    random_part = ''.join(random.choice(alphabet) for _ in range(length))
+    return f"flag{{{random_part}}}"
 
-# Interval in seconds to fetch and update the flag
-UPDATE_INTERVAL_SECONDS = 300  # 5 minutes
+def flag_rotation_thread():
+    """A background thread that generates a new flag at a set interval."""
+    print("Flag rotation thread started.")
+    while True:
+        print(f"[{time.ctime()}] Generating new flag...")
+        new_flag = generate_new_flag()
+        app_state['current_flag'] = new_flag
+        print(f"[{time.ctime()}] New flag is: {app_state['current_flag']}")
+        time.sleep(FLAG_LIFETIME_SECONDS)
 
-def fetch_current_flag():
-    """Fetches the current flag from the central server."""
-    print(f"\n[{time.ctime()}] Fetching flag from {FLAG_AUTHORITY_URL}")
-    try:
-        headers = {'Authorization': f'Bearer {TEAM_API_KEY}'}
-        response = requests.get(FLAG_AUTHORITY_URL, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            flag = response.json().get('flag')
-            print(f"[{time.ctime()}] Successfully fetched flag: {flag}")
-            return flag
-        else:
-            print(f"[{time.ctime()}] [ERROR] Failed to fetch flag. Status: {response.status_code}, Response: {response.text}")
-            return None
-            
-    except requests.exceptions.RequestException as e:
-        print(f"[{time.ctime()}] [ERROR] Network error while fetching flag: {e}")
-        return None
+# --- Flask Web Application ---
+app = Flask(__name__)
 
-def update_local_flags(new_flag):
-    """Writes the new flag to the local user and root flag files."""
-    print(f"[{time.ctime()}] Attempting to write new flag to local files...")
+# A simple HTML template for the front page where users can submit the flag
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CTF Scoreboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; }
+        .container { background-color: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+        h1 { color: #333; }
+        p { color: #666; }
+        input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-top: 20px; border: 1px solid #ccc; border-radius: 6px; }
+        input[type="submit"] { width: 100%; padding: 12px; margin-top: 10px; border: none; border-radius: 6px; background-color: #007bff; color: white; font-size: 16px; cursor: pointer; transition: background-color 0.3s; }
+        input[type="submit"]:hover { background-color: #0056b3; }
+        .message { margin-top: 20px; font-weight: bold; }
+        .correct { color: #28a745; }
+        .incorrect { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Submit Flag</h1>
+        <p>Enter the flag you found on the target machine.</p>
+        <form method="POST" action="/api/submit_flag">
+            <input type="text" name="flag" placeholder="flag{...}" required>
+            <input type="submit" value="Submit">
+        </form>
+        {% if message %}
+            <p class="message {{ 'correct' if 'Correct' in message else 'incorrect' }}">{{ message }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
-    # --- Write User Flag ---
-    try:
-        # Ensure the directory exists
-        user_dir = os.path.dirname(USER_FLAG_PATH)
-        if not os.path.exists(user_dir):
-            os.makedirs(user_dir)
-        with open(USER_FLAG_PATH, 'w') as f:
-            f.write(new_flag)
-        print(f"[{time.ctime()}] [SUCCESS] Wrote flag to {USER_FLAG_PATH}")
-    except IOError as e:
-        print(f"[{time.ctime()}] [ERROR] Could not write to user flag file {USER_FLAG_PATH}: {e}")
-        print("    Check file permissions and if the path is correct.")
+@app.route("/", methods=["GET"])
+def index():
+    """Serves the main page for manual flag submission."""
+    return render_template_string(HTML_TEMPLATE)
 
-    # --- Write Root Flag ---
-    # This part requires the script to be run with root privileges (sudo)
-    if os.geteuid() == 0:
-        try:
-            root_dir = os.path.dirname(ROOT_FLAG_PATH)
-            if not os.path.exists(root_dir):
-                os.makedirs(root_dir)
-            with open(ROOT_FLAG_PATH, 'w') as f:
-                f.write(new_flag)
-            print(f"[{time.ctime()}] [SUCCESS] Wrote flag to {ROOT_FLAG_PATH}")
-        except IOError as e:
-            print(f"[{time.ctime()}] [ERROR] Could not write to root flag file {ROOT_FLAG_PATH}: {e}")
+# --- API Endpoints ---
+
+@app.route("/api/get_current_flag", methods=["GET"])
+def get_current_flag():
+    """API endpoint for client scripts to fetch the current flag."""
+    # Security Check: Ensure the request has the correct API key
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or auth_header != f"Bearer {TEAM_API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    return jsonify({"flag": app_state['current_flag']})
+
+@app.route("/api/submit_flag", methods=["POST"])
+def submit_flag():
+    """
+    API endpoint for players/clients to submit a flag and check if it's correct.
+    This can be used from the web UI or by the client script as a health check.
+    """
+    submitted_flag = ""
+    # Handle both JSON and form submissions
+    if request.is_json:
+        data = request.get_json()
+        submitted_flag = data.get("flag")
     else:
-        print(f"[{time.ctime()}] [WARNING] Not running as root. Skipping root flag update at {ROOT_FLAG_PATH}.")
+        submitted_flag = request.form.get("flag")
+
+    if not submitted_flag:
+        return jsonify({"error": "No flag provided"}), 400
+
+    if submitted_flag == app_state['current_flag']:
+        message = "Correct! Flag accepted."
+        # For the web UI
+        if request.form:
+            return render_template_string(HTML_TEMPLATE, message=message)
+        # For API clients
+        return jsonify({"status": "success", "message": message})
+    else:
+        message = "Incorrect flag. Try again."
+        # For the web UI
+        if request.form:
+            return render_template_string(HTML_TEMPLATE, message=message)
+        # For API clients
+        return jsonify({"status": "failure", "message": message}), 400
 
 
 if __name__ == "__main__":
-    print("--- CTF Flag Rotator Client ---")
-    print(f"Fetching flag every {UPDATE_INTERVAL_SECONDS} seconds.")
-    print("Press Ctrl+C to stop.")
-
-    if os.geteuid() != 0:
-        print("\n[WARNING] Script is not running as root. It will not be able to update the root flag file.\n")
-
-    try:
-        while True:
-            current_flag = fetch_current_flag()
-            if current_flag:
-                update_local_flags(current_flag)
-            else:
-                print(f"[{time.ctime()}] Skipping local update due to fetch failure.")
-            
-            print(f"\n[{time.ctime()}] Sleeping for {UPDATE_INTERVAL_SECONDS} seconds...")
-            time.sleep(UPDATE_INTERVAL_SECONDS)
-            
-    except KeyboardInterrupt:
-        print("\n\nScript stopped by user. Exiting.")
+    # Start the flag rotation in a separate thread
+    rotation_daemon = threading.Thread(target=flag_rotation_thread, daemon=True)
+    rotation_daemon.start()
+    
+    # Run the Flask web server
+    # Use host='0.0.0.0' to make it accessible from other machines on the network
+    app.run(host='0.0.0.0', port=5000)

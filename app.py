@@ -14,39 +14,55 @@ TEAM_API_KEY = "SECRET_API_KEY_HERE" # IMPORTANT: Change this to a secure, rando
 # This dictionary will hold our application's state. Using a dictionary
 # makes it mutable, which is easier to manage across threads.
 app_state = {
-    "current_flag": "flag{this_is_the_initial_flag}",
+    "current_user_flag": "flag{this_is_the_initial_user_flag}",
+    "current_root_flag": "flag{this_is_the_initial_root_flag}",
     "red_team_score": 0,
     "blue_team_score": 0,
-    "flag_submitted_this_round": False
+    "user_flag_submitted_this_round": False,
+    "root_flag_submitted_this_round": False
 }
 
 # --- Flag and Score Logic ---
-def generate_new_flag(length=32):
-    """Generates a new, random CTF-style flag."""
+def generate_new_flag(prefix, length=28):
+    """Generates a new, random CTF-style flag with a prefix (user or root)."""
     alphabet = string.ascii_letters + string.digits
     random_part = ''.join(random.choice(alphabet) for _ in range(length))
-    return f"flag{{{random_part}}}"
+    return f"flag{{{prefix}_{random_part}}}"
 
 def flag_rotation_thread():
-    """A background thread that generates a new flag at a set interval."""
+    """A background thread that generates new user and root flags at a set interval."""
     print("Flag rotation thread started.")
     while True:
-        print(f"[{time.ctime()}] Generating new flag...")
-        new_flag = generate_new_flag()
-        app_state['current_flag'] = new_flag
-        app_state['flag_submitted_this_round'] = False # Reset submission status
-        print(f"[{time.ctime()}] New flag is: {app_state['current_flag']}")
+        print(f"[{time.ctime()}] Generating new flags...")
+        new_user_flag = generate_new_flag("user")
+        new_root_flag = generate_new_flag("root")
+        
+        app_state['current_user_flag'] = new_user_flag
+        app_state['current_root_flag'] = new_root_flag
+        app_state['user_flag_submitted_this_round'] = False
+        app_state['root_flag_submitted_this_round'] = False
+        
+        print(f"[{time.ctime()}] New User Flag is: {app_state['current_user_flag']}")
+        print(f"[{time.ctime()}] New Root Flag is: {app_state['current_root_flag']}")
         time.sleep(FLAG_LIFETIME_SECONDS)
 
 def blue_team_score_thread():
-    """A background thread that awards points to the Blue team periodically."""
+    """A background thread that awards points to the Blue team periodically for uncaptured flags."""
     print("Blue team scoring thread started.")
     while True:
         time.sleep(BLUE_TEAM_SCORE_INTERVAL_SECONDS)
-        # Award points only if the flag wasn't captured in the last interval
-        if not app_state['flag_submitted_this_round']:
+        score_awarded = 0
+        # Award points for the user flag if it wasn't captured
+        if not app_state['user_flag_submitted_this_round']:
             app_state['blue_team_score'] += 5
-            print(f"[{time.ctime()}] Blue team scored! New score: {app_state['blue_team_score']}")
+            score_awarded += 5
+        # Award points for the root flag if it wasn't captured
+        if not app_state['root_flag_submitted_this_round']:
+            app_state['blue_team_score'] += 5
+            score_awarded += 5
+            
+        if score_awarded > 0:
+            print(f"[{time.ctime()}] Blue team scored {score_awarded} points! New score: {app_state['blue_team_score']}")
 
 # --- Flask Web Application ---
 app = Flask(__name__)
@@ -91,13 +107,13 @@ HTML_TEMPLATE = """
             </div>
         </div>
         <h2>Submit Flag</h2>
-        <p>Enter the flag you found on the target machine.</p>
+        <p>Enter the user or root flag you found on the target machine.</p>
         <form method="POST" action="/api/submit_flag">
             <input type="text" name="flag" placeholder="flag{...}" required>
             <input type="submit" value="Submit">
         </form>
         {% if message %}
-            <p class="message {{ 'correct' in message if message else '' }} {{ 'Incorrect' in message if message else 'incorrect' }} {{ 'already' in message if message else 'info' }}">{{ message }}</p>
+            <p class="message {{ 'Correct!' in message if message else '' }} {{ 'Incorrect' in message if message else 'incorrect' }} {{ 'already' in message if message else 'info' }}">{{ message }}</p>
         {% endif %}
     </div>
 </body>
@@ -117,13 +133,16 @@ def index():
 
 @app.route("/api/get_current_flag", methods=["GET"])
 def get_current_flag():
-    """API endpoint for client scripts to fetch the current flag."""
+    """API endpoint for client scripts to fetch the current flags."""
     # Security Check: Ensure the request has the correct API key
     auth_header = request.headers.get('Authorization')
     if not auth_header or auth_header != f"Bearer {TEAM_API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
-    return jsonify({"flag": app_state['current_flag']})
+    return jsonify({
+        "user_flag": app_state['current_user_flag'],
+        "root_flag": app_state['current_root_flag']
+    })
 
 @app.route("/api/submit_flag", methods=["POST"])
 def submit_flag():
@@ -143,19 +162,29 @@ def submit_flag():
         return jsonify({"error": "No flag provided"}), 400
 
     message = ""
-    status_code = 200
+    status_code = 400 # Default to failure/incorrect
 
-    if submitted_flag == app_state['current_flag']:
-        if not app_state['flag_submitted_this_round']:
-            app_state['red_team_score'] += 10 # Or any points you want
-            app_state['flag_submitted_this_round'] = True
-            message = "Correct! Flag accepted. Red Team scores!"
+    # Check against user flag
+    if submitted_flag == app_state['current_user_flag']:
+        if not app_state['user_flag_submitted_this_round']:
+            app_state['red_team_score'] += 5 # Points for user flag
+            app_state['user_flag_submitted_this_round'] = True
+            message = "Correct! User flag accepted. Red Team scores 5 points!"
+            status_code = 200
         else:
-            message = "Correct, but this flag has already been submitted."
-            status_code = 400 # Bad request as it's a duplicate
+            message = "Correct, but the user flag has already been submitted this round."
+    # Check against root flag
+    elif submitted_flag == app_state['current_root_flag']:
+        if not app_state['root_flag_submitted_this_round']:
+            app_state['red_team_score'] += 10 # More points for root flag
+            app_state['root_flag_submitted_this_round'] = True
+            message = "Correct! Root flag accepted. Red Team scores 10 points!"
+            status_code = 200
+        else:
+            message = "Correct, but the root flag has already been submitted this round."
+    # Incorrect flag
     else:
         message = "Incorrect flag. Try again."
-        status_code = 400
 
     # For the web UI
     if request.form:
@@ -167,7 +196,7 @@ def submit_flag():
         ), 200 # Return 200 to render the page, even if flag is wrong
     
     # For API clients
-    if "Incorrect" in message or "already" in message:
+    if status_code != 200:
         return jsonify({"status": "failure", "message": message}), status_code
     else:
         return jsonify({"status": "success", "message": message})

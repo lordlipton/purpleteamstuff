@@ -16,7 +16,7 @@ app_state = {
     "current_user_flag": "flag{this_is_the_initial_user_flag}",
     "current_root_flag": "flag{this_is_the_initial_root_flag}",
     "red_team_score": 0,
-    "blue_team_score": 15, # Blue team starts with 15 points
+    "blue_team_score": 0, # Blue team starts at 0, awarded points each round
     "user_flag_submitted_this_round": False,
     "root_flag_submitted_this_round": False
 }
@@ -32,11 +32,13 @@ def flag_rotation_thread():
     """A background thread that generates new user and root flags at a set interval."""
     print("Flag rotation thread started.")
     while True:
-        print(f"[{time.ctime()}] New round starting. Resetting scores and generating new flags...")
+        # At the start of each round, award the Blue Team 15 points for defense.
+        app_state['blue_team_score'] += 15
+        print(f"[{time.ctime()}] New round starting. Blue team awarded 15 points. New score: {app_state['blue_team_score']}")
         
-        # Reset scores for the new round
-        app_state['red_team_score'] = 0
-        app_state['blue_team_score'] = 15
+        print(f"[{time.ctime()}] Generating new flags...")
+        
+        # Scores are now persistent and are NOT reset each round.
         
         new_user_flag = generate_new_flag("user")
         new_root_flag = generate_new_flag("root")
@@ -46,9 +48,10 @@ def flag_rotation_thread():
         app_state['user_flag_submitted_this_round'] = False
         app_state['root_flag_submitted_this_round'] = False
         
-        print(f"[{time.ctime()}] Scores have been reset. Red: 0, Blue: 15")
         print(f"[{time.ctime()}] New User Flag is: {app_state['current_user_flag']}")
         print(f"[{time.ctime()}] New Root Flag is: {app_state['current_root_flag']}")
+        
+        # Sleep until the next round
         time.sleep(FLAG_LIFETIME_SECONDS)
 
 # --- Flask Web Application ---

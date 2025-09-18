@@ -54,12 +54,12 @@ def blue_team_score_thread():
         score_awarded = 0
         # Award points for the user flag if it wasn't captured
         if not app_state['user_flag_submitted_this_round']:
-            app_state['blue_team_score'] += 5
+            app_state['blue_team_score'] += 5 # Points for defending user flag
             score_awarded += 5
         # Award points for the root flag if it wasn't captured
         if not app_state['root_flag_submitted_this_round']:
-            app_state['blue_team_score'] += 5
-            score_awarded += 5
+            app_state['blue_team_score'] += 10 # Points for defending root flag
+            score_awarded += 10
             
         if score_awarded > 0:
             print(f"[{time.ctime()}] Blue team scored {score_awarded} points! New score: {app_state['blue_team_score']}")

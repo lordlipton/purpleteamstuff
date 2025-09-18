@@ -7,7 +7,6 @@ from flask import Flask, request, jsonify, render_template_string
 
 # --- Configuration ---
 FLAG_LIFETIME_SECONDS = 300  # 5 minutes
-BLUE_TEAM_SCORE_INTERVAL_SECONDS = 300 # 5 minutes
 TEAM_API_KEY = "SECRET_API_KEY_HERE" # IMPORTANT: Change this to a secure, random key
 
 # --- Global State ---
@@ -17,7 +16,7 @@ app_state = {
     "current_user_flag": "flag{this_is_the_initial_user_flag}",
     "current_root_flag": "flag{this_is_the_initial_root_flag}",
     "red_team_score": 0,
-    "blue_team_score": 0,
+    "blue_team_score": 15, # Blue team starts with 15 points
     "user_flag_submitted_this_round": False,
     "root_flag_submitted_this_round": False
 }
@@ -33,7 +32,12 @@ def flag_rotation_thread():
     """A background thread that generates new user and root flags at a set interval."""
     print("Flag rotation thread started.")
     while True:
-        print(f"[{time.ctime()}] Generating new flags...")
+        print(f"[{time.ctime()}] New round starting. Resetting scores and generating new flags...")
+        
+        # Reset scores for the new round
+        app_state['red_team_score'] = 0
+        app_state['blue_team_score'] = 15
+        
         new_user_flag = generate_new_flag("user")
         new_root_flag = generate_new_flag("root")
         
@@ -42,27 +46,10 @@ def flag_rotation_thread():
         app_state['user_flag_submitted_this_round'] = False
         app_state['root_flag_submitted_this_round'] = False
         
+        print(f"[{time.ctime()}] Scores have been reset. Red: 0, Blue: 15")
         print(f"[{time.ctime()}] New User Flag is: {app_state['current_user_flag']}")
         print(f"[{time.ctime()}] New Root Flag is: {app_state['current_root_flag']}")
         time.sleep(FLAG_LIFETIME_SECONDS)
-
-def blue_team_score_thread():
-    """A background thread that awards points to the Blue team periodically for uncaptured flags."""
-    print("Blue team scoring thread started.")
-    while True:
-        time.sleep(BLUE_TEAM_SCORE_INTERVAL_SECONDS)
-        score_awarded = 0
-        # Award points for the user flag if it wasn't captured
-        if not app_state['user_flag_submitted_this_round']:
-            app_state['blue_team_score'] += 5 # Points for defending user flag
-            score_awarded += 5
-        # Award points for the root flag if it wasn't captured
-        if not app_state['root_flag_submitted_this_round']:
-            app_state['blue_team_score'] += 10 # Points for defending root flag
-            score_awarded += 10
-            
-        if score_awarded > 0:
-            print(f"[{time.ctime()}] Blue team scored {score_awarded} points! New score: {app_state['blue_team_score']}")
 
 # --- Flask Web Application ---
 app = Flask(__name__)
@@ -167,7 +154,8 @@ def submit_flag():
     # Check against user flag
     if submitted_flag == app_state['current_user_flag']:
         if not app_state['user_flag_submitted_this_round']:
-            app_state['red_team_score'] += 5 # Points for user flag
+            app_state['red_team_score'] += 5
+            app_state['blue_team_score'] -= 5
             app_state['user_flag_submitted_this_round'] = True
             message = "Correct! User flag accepted. Red Team scores 5 points!"
             status_code = 200
@@ -176,7 +164,8 @@ def submit_flag():
     # Check against root flag
     elif submitted_flag == app_state['current_root_flag']:
         if not app_state['root_flag_submitted_this_round']:
-            app_state['red_team_score'] += 10 # More points for root flag
+            app_state['red_team_score'] += 10
+            app_state['blue_team_score'] -= 10
             app_state['root_flag_submitted_this_round'] = True
             message = "Correct! Root flag accepted. Red Team scores 10 points!"
             status_code = 200
@@ -206,10 +195,6 @@ if __name__ == "__main__":
     # Start the flag rotation in a separate thread
     rotation_daemon = threading.Thread(target=flag_rotation_thread, daemon=True)
     rotation_daemon.start()
-
-    # Start the blue team scoring in a separate thread
-    blue_team_daemon = threading.Thread(target=blue_team_score_thread, daemon=True)
-    blue_team_daemon.start()
     
     # Run the Flask web server
     # Use host='0.0.0.0' to make it accessible from other machines on the network
